@@ -17,6 +17,7 @@ DEVICE = "cuda"                # Single H100
 SEED = 1234
 NUM_THREADS = torch.get_num_threads()
 TOKEN_BUDGETS = [512, 1024, 2048]
+BATCH_SIZES = [1, 2, 4, 8]       # batch sizes to test (processes multiple inputs simultaneously)
 WARMUP_GENERATIONS = 1           # warmup calls (not timed)
 MEM_REPEATS = 3                  # times to measure peak memory per setting
 TIMER_MIN_RUNTIME_S = 2.0        # torch.benchmark blocked_autorange budget
@@ -55,11 +56,13 @@ class Point:
     toks_per_s: float
     peak_alloc_gib: float
     peak_reserved_gib: float
+    batch_size: int = 1
 
 
 @dataclass
 class ScenarioResult:
     label: str
+    batch_size: int = 1
     # map: max_new_tokens -> Point
     by_tokens: dict = field(default_factory=dict)
 
@@ -78,16 +81,45 @@ def load_model(attn_implementation: str):
     return tokenizer, model, model.device
 
 
-def build_inputs(tokenizer, device):
-    messages = [
-        {"role": "system", "content": "What is Tensor Parallelism?"},
+def build_inputs(tokenizer, device, batch_size=1):
+    # Create different prompts for each item in the batch to simulate realistic usage
+    base_prompts = [
+        "What is Tensor Parallelism?",
+        "Explain machine learning fundamentals.",
+        "How do neural networks work?",
+        "What are the benefits of distributed computing?",
+        "Describe the attention mechanism in transformers.",
+        "What is gradient descent?",
+        "How does backpropagation work?",
+        "Explain the concept of overfitting.",
     ]
-    return tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        return_tensors="pt",
-        return_dict=True,
-    ).to(device)
+    
+    # Cycle through prompts to create a batch
+    batch_messages = []
+    for i in range(batch_size):
+        prompt = base_prompts[i % len(base_prompts)]
+        messages = [{"role": "system", "content": prompt}]
+        batch_messages.append(messages)
+    
+    # Apply chat template to each conversation in the batch
+    batch_inputs = []
+    for messages in batch_messages:
+        inputs = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+        )
+        batch_inputs.append(inputs)
+    
+    # Stack the inputs to create a proper batch
+    if batch_size == 1:
+        return batch_inputs[0].to(device)
+    else:
+        # Concatenate input_ids and attention_mask
+        input_ids = torch.cat([inp["input_ids"] for inp in batch_inputs], dim=0)
+        attention_mask = torch.cat([inp["attention_mask"] for inp in batch_inputs], dim=0)
+        return {"input_ids": input_ids.to(device), "attention_mask": attention_mask.to(device)}
 
 
 # ----------------------------
@@ -138,25 +170,29 @@ def measure_latency_with_torch_benchmark(model, model_inputs, max_new_tokens: in
 # ----------------------------
 # Benchmark driver
 # ----------------------------
-def benchmark_scenario(attn_implementation: str) -> ScenarioResult:
+def benchmark_scenario(attn_implementation: str, batch_size: int = 1) -> ScenarioResult:
     set_determinism()
     tokenizer, model, device = load_model(attn_implementation)
-    inputs = build_inputs(tokenizer, device)
+    inputs = build_inputs(tokenizer, device, batch_size)
 
     # Warmups (not measured)
     for _ in range(WARMUP_GENERATIONS):
         _ = generate_once(model, inputs, max_new_tokens=max(TOKEN_BUDGETS))
         torch.cuda.synchronize(device)
 
-    result = ScenarioResult(label=f"attn_implementation={attn_implementation}")
+    result = ScenarioResult(
+        label=f"attn_implementation={attn_implementation}",
+        batch_size=batch_size
+    )
 
     for toks in TOKEN_BUDGETS:
         # Timing via torch.benchmark
         latency_s = measure_latency_with_torch_benchmark(model, inputs, toks)
 
-        # Actual generated token count (sanity; should equal toks)
+        # Actual generated token count (sanity; should equal toks per item in batch)
         out = generate_once(model, inputs, toks)
-        actual_tokens = out.sequences.shape[1] - inputs["input_ids"].shape[1]
+        actual_tokens_per_item = (out.sequences.shape[1] - inputs["input_ids"].shape[1])
+        total_tokens = actual_tokens_per_item * batch_size
         del out
         torch.cuda.synchronize(device)
 
@@ -172,10 +208,11 @@ def benchmark_scenario(attn_implementation: str) -> ScenarioResult:
 
         result.by_tokens[toks] = Point(
             latency_s=latency_s,
-            tokens=actual_tokens,
-            toks_per_s=(actual_tokens / latency_s) if latency_s > 0 else float("nan"),
+            tokens=total_tokens,
+            toks_per_s=(total_tokens / latency_s) if latency_s > 0 else float("nan"),
             peak_alloc_gib=med_alloc,
             peak_reserved_gib=med_reserved,
+            batch_size=batch_size,
         )
 
     # Cleanup
@@ -189,26 +226,27 @@ def print_comparison(results):
     print("\n=== Throughput & Memory Comparison (Single H100) ===")
     print(f"Model: {MODEL_ID}")
     print(f"Token budgets: {TOKEN_BUDGETS}")
+    print(f"Batch sizes: {BATCH_SIZES}")
     print(f"torch.utils.benchmark min_run_time={TIMER_MIN_RUNTIME_S}s | mem_repeats={MEM_REPEATS}")
-    print("-" * 120)
+    print("-" * 140)
 
     header = (
-        f"{'Attention Implementation':<40} {'Tokens':>8} "
+        f"{'Attention Implementation':<40} {'Batch':>6} {'Tokens':>8} "
         f"{'Median Latency (s)':>20} {'Tokens/s':>12} "
         f"{'Peak Alloc (GiB)':>18} {'Peak Reserved (GiB)':>20}"
     )
     print(header)
-    print("-" * 120)
+    print("-" * 140)
 
     for toks in TOKEN_BUDGETS:
         for res in results:
             p = res.by_tokens[toks]
             print(
-                f"{res.label:<40} {toks:>8d} "
+                f"{res.label:<40} {res.batch_size:>6d} {toks:>8d} "
                 f"{p.latency_s:>20.3f} {p.toks_per_s:>12.1f} "
                 f"{p.peak_alloc_gib:>18.2f} {p.peak_reserved_gib:>20.2f}"
             )
-        print("-" * 120)
+        print("-" * 140)
 
 
 # ----------------------------
@@ -224,13 +262,14 @@ if __name__ == "__main__":
 
     results = []
     for attn_impl in ATTN_IMPLEMENTATIONS:
-        print(f"\n>>> Benchmarking with attn_implementation={attn_impl}")
-        try:
-            res = benchmark_scenario(attn_implementation=attn_impl)
-            results.append(res)
-        except Exception as e:
-            print(f"Failed to benchmark {attn_impl}: {e}")
-            continue
+        for batch_size in BATCH_SIZES:
+            print(f"\n>>> Benchmarking with attn_implementation={attn_impl}, batch_size={batch_size}")
+            try:
+                res = benchmark_scenario(attn_implementation=attn_impl, batch_size=batch_size)
+                results.append(res)
+            except Exception as e:
+                print(f"Failed to benchmark {attn_impl} with batch_size={batch_size}: {e}")
+                continue
 
     if results:
         print_comparison(results)
