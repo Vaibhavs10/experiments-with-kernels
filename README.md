@@ -56,18 +56,20 @@ print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 Let's run a quick benchmark:
 
 
-| Attention Implementation                              | Tokens | Median Latency (s) | Tokens/s | Peak Alloc (GiB) | Peak Reserved (GiB) |
-|-------------------------------------------------------|--------|--------------------|----------|------------------|---------------------|
-| **attn_implementation=eager**                         | 512    | 17.045             | 30.0     | 5.80             | 5.83                |
-| **attn_implementation=sdpa**                          | 512    | 13.150             | 38.9     | 5.80             | 5.81                |
-| **attn_implementation=kernels-community/flash-attn3:flash_attention** | 512    | 16.877             | 30.3     | 5.80             | 5.81                |
-| **attn_implementation=kernels-community/flash-attn**  | 512    | 17.222             | 29.7     | 5.80             | 5.81                |
-| **attn_implementation=eager**                         | 1024   | 34.142             | 30.0     | 5.86             | 5.96                |
-| **attn_implementation=sdpa**                          | 1024   | 26.277             | 39.0     | 5.86             | 5.94                |
-| **attn_implementation=kernels-community/flash-attn3:flash_attention** | 1024   | 33.604             | 30.5     | 5.86             | 5.94                |
-| **attn_implementation=kernels-community/flash-attn**  | 1024   | 34.159             | 30.0     | 5.86             | 5.94                |
-| **attn_implementation=eager**                         | 2048   | 68.203             | 30.0     | 5.92             | 6.04                |
-| **attn_implementation=sdpa**                          | 2048   | 52.433             | 39.1     | 5.91             | 6.02                |
-| **attn_implementation=kernels-community/flash-attn3:flash_attention** | 2048   | 67.280             | 30.4     | 5.91             | 6.02                |
-| **attn_implementation=kernels-community/flash-attn**  | 2048   | 68.163             | 30.0     | 5.91             | 6.02                |
+| Attention Implementation              | Tokens | Median Latency (s) | Tokens/s | Peak Alloc (GiB) | Peak Reserved (GiB) |
+|---------------------------------------|--------|--------------------|----------|------------------|---------------------|
+| **eager**                             | 512    | 17.045             | 30.0     | 5.80             | 5.83                |
+| **sdpa**                              | 512    | 13.150             | 38.9     | 5.80             | 5.81                |
+| **flash-attn3:flash_attention**        | 512    | 16.877             | 30.3     | 5.80             | 5.81                |
+| **flash-attn**                        | 512    | 17.222             | 29.7     | 5.80             | 5.81                |
+|---------------------------------------|--------|--------------------|----------|------------------|---------------------|
+| **eager**                             | 1024   | 34.142             | 30.0     | 5.86             | 5.96                |
+| **sdpa**                              | 1024   | 26.277             | 39.0     | 5.86             | 5.94                |
+| **flash-attn3:flash_attention**        | 1024   | 33.604             | 30.5     | 5.86             | 5.94                |
+| **flash-attn**                        | 1024   | 34.159             | 30.0     | 5.86             | 5.94                |
+|---------------------------------------|--------|--------------------|----------|------------------|---------------------|
+| **eager**                             | 2048   | 68.203             | 30.0     | 5.92             | 6.04                |
+| **sdpa**                              | 2048   | 52.433             | 39.1     | 5.91             | 6.02                |
+| **flash-attn3:flash_attention**        | 2048   | 67.280             | 30.4     | 5.91             | 6.02                |
+| **flash-attn**                        | 2048   | 68.163             | 30.0     | 5.91             | 6.02                |
 
