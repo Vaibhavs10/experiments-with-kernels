@@ -12,8 +12,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, Mxfp4Config
 # ----------------------------
 # Config
 # ----------------------------
-MODEL_ID = "openai/gpt-oss-20b"
-DEVICE = "cuda:0"                # Single H100
+MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
+DEVICE = "cuda"                # Single H100
 SEED = 1234
 NUM_THREADS = torch.get_num_threads()
 TOKEN_BUDGETS = [512, 1024, 2048]
