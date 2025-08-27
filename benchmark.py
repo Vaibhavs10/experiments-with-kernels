@@ -16,8 +16,8 @@ MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
 DEVICE = "cuda"                # Single H100
 SEED = 1234
 NUM_THREADS = torch.get_num_threads()
-TOKEN_BUDGETS = [512, 1024, 2048]
-BATCH_SIZES = [1, 2, 4, 8]       # batch sizes to test (processes multiple inputs simultaneously)
+TOKEN_BUDGETS = [512, 2048]
+BATCH_SIZES = [1, 16, 32]       # batch sizes to test (processes multiple inputs simultaneously)
 WARMUP_GENERATIONS = 1           # warmup calls (not timed)
 MEM_REPEATS = 3                  # times to measure peak memory per setting
 TIMER_MIN_RUNTIME_S = 2.0        # torch.benchmark blocked_autorange budget
@@ -189,7 +189,14 @@ def benchmark_scenario(attn_implementation: str, batch_size: int = 1) -> Scenari
 
     # Warmups (not measured) - use smaller token budget for larger batches to avoid OOM
     # Scale down the warmup tokens based on batch size to prevent memory issues
-    warmup_tokens = min(TOKEN_BUDGETS) if batch_size > 4 else TOKEN_BUDGETS[0]
+    if batch_size >= 32:
+        warmup_tokens = min(256, min(TOKEN_BUDGETS) // 2)  # Very conservative for large batches
+    elif batch_size >= 16:
+        warmup_tokens = min(TOKEN_BUDGETS) // 2  # Half the smallest budget for medium-large batches
+    elif batch_size > 4:
+        warmup_tokens = min(TOKEN_BUDGETS)  # Smallest budget for moderately large batches
+    else:
+        warmup_tokens = TOKEN_BUDGETS[0]  # First budget for small batches
     for _ in range(WARMUP_GENERATIONS):
         _ = generate_once(model, inputs, max_new_tokens=warmup_tokens)
         torch.cuda.synchronize(device)
@@ -200,34 +207,47 @@ def benchmark_scenario(attn_implementation: str, batch_size: int = 1) -> Scenari
     )
 
     for toks in TOKEN_BUDGETS:
-        # Timing via torch.benchmark
-        latency_s = measure_latency_with_torch_benchmark(model, inputs, toks)
+        try:
+            # Clear memory before each token budget test
+            clear_cuda()
+            
+            # Timing via torch.benchmark
+            latency_s = measure_latency_with_torch_benchmark(model, inputs, toks)
 
-        # Actual generated token count (sanity; should equal toks per item in batch)
-        out = generate_once(model, inputs, toks)
-        actual_tokens_per_item = (out.sequences.shape[1] - inputs["input_ids"].shape[1])
-        total_tokens = actual_tokens_per_item * batch_size
-        del out
-        torch.cuda.synchronize(device)
+            # Actual generated token count (sanity; should equal toks per item in batch)
+            out = generate_once(model, inputs, toks)
+            actual_tokens_per_item = (out.sequences.shape[1] - inputs["input_ids"].shape[1])
+            total_tokens = actual_tokens_per_item * batch_size
+            del out
+            torch.cuda.synchronize(device)
 
-        # Memory: take median of multiple probes
-        allocs, reserveds = [], []
-        for _ in range(MEM_REPEATS):
-            pa, pr = run_memory_probe(model, inputs, device, toks)
-            allocs.append(pa)
-            reserveds.append(pr)
+            # Memory: take median of multiple probes
+            allocs, reserveds = [], []
+            for _ in range(MEM_REPEATS):
+                pa, pr = run_memory_probe(model, inputs, device, toks)
+                allocs.append(pa)
+                reserveds.append(pr)
 
-        med_alloc = statistics.median(allocs)
-        med_reserved = statistics.median(reserveds)
+            med_alloc = statistics.median(allocs)
+            med_reserved = statistics.median(reserveds)
 
-        result.by_tokens[toks] = Point(
-            latency_s=latency_s,
-            tokens=total_tokens,
-            toks_per_s=(total_tokens / latency_s) if latency_s > 0 else float("nan"),
-            peak_alloc_gib=med_alloc,
-            peak_reserved_gib=med_reserved,
-            batch_size=batch_size,
-        )
+            result.by_tokens[toks] = Point(
+                latency_s=latency_s,
+                tokens=total_tokens,
+                toks_per_s=(total_tokens / latency_s) if latency_s > 0 else float("nan"),
+                peak_alloc_gib=med_alloc,
+                peak_reserved_gib=med_reserved,
+                batch_size=batch_size,
+            )
+        except torch.cuda.OutOfMemoryError as e:
+            print(f"OOM for batch_size={batch_size}, tokens={toks}: {e}")
+            # Clear memory and continue with next token budget
+            clear_cuda()
+            continue
+        except Exception as e:
+            print(f"Error for batch_size={batch_size}, tokens={toks}: {e}")
+            clear_cuda()
+            continue
 
     # Cleanup
     del tokenizer, model, inputs
@@ -254,12 +274,19 @@ def print_comparison(results):
 
     for toks in TOKEN_BUDGETS:
         for res in results:
-            p = res.by_tokens[toks]
-            print(
-                f"{res.label:<40} {res.batch_size:>6d} {toks:>8d} "
-                f"{p.latency_s:>20.3f} {p.toks_per_s:>12.1f} "
-                f"{p.peak_alloc_gib:>18.2f} {p.peak_reserved_gib:>20.2f}"
-            )
+            if toks in res.by_tokens:
+                p = res.by_tokens[toks]
+                print(
+                    f"{res.label:<40} {res.batch_size:>6d} {toks:>8d} "
+                    f"{p.latency_s:>20.3f} {p.toks_per_s:>12.1f} "
+                    f"{p.peak_alloc_gib:>18.2f} {p.peak_reserved_gib:>20.2f}"
+                )
+            else:
+                print(
+                    f"{res.label:<40} {res.batch_size:>6d} {toks:>8d} "
+                    f"{'OOM/FAILED':>20} {'N/A':>12} "
+                    f"{'N/A':>18} {'N/A':>20}"
+                )
         print("-" * 140)
 
 
