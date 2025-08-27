@@ -119,7 +119,6 @@ def build_inputs(tokenizer, device, batch_size=1):
         inputs = tokenizer(
             batch_texts[0],
             return_tensors="pt",
-            return_dict=True,
         )
         return inputs.to(device)
     else:
@@ -127,7 +126,6 @@ def build_inputs(tokenizer, device, batch_size=1):
         inputs = tokenizer(
             batch_texts,
             return_tensors="pt",
-            return_dict=True,
             padding=True,  # Pad to the longest sequence in the batch
             truncation=True,  # Ensure we don't exceed model's max length
         )
