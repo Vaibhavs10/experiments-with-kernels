@@ -62,29 +62,18 @@ Token budgets: [512, 2048]
 Batch sizes: [1, 16, 32]  
 torch.utils.benchmark min_run_time=2.0s | mem_repeats=3
 
-| Attention Implementation                        | Batch | Tokens | Median Latency (s) | Tokens/s | Peak Alloc (GiB) | Peak Reserved (GiB) |
-|-------------------------------------------------|-------|--------|--------------------|----------|------------------|---------------------|
-| attn_implementation=eager                       | 1     | 512    | 17.895             | 28.6     | 5.80             | 5.83                |
-| attn_implementation=eager                       | 16    | 512    | 18.036             | 454.2    | 6.46             | 6.86                |
-| attn_implementation=eager                       | 32    | 512    | 18.572             | 882.2    | 7.15             | 8.46                |
-| attn_implementation=sdpa                        | 1     | 512    | 14.180             | 36.1     | 5.80             | 5.81                |
-| attn_implementation=sdpa                        | 16    | 512    | 17.595             | 465.6    | 6.46             | 6.86                |
-| attn_implementation=sdpa                        | 32    | 512    | 17.478             | 937.4    | 7.15             | 8.46                |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 1     | 512    | 18.530             | 27.6     | 5.80             | 5.81                |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 16    | 512    | 23.669             | 346.1    | 6.41             | 6.62                |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 32    | 512    | 23.887             | 685.9    | 7.08             | 8.43                |
-| attn_implementation=kernels-community/flash-attn | 1     | 512    | 18.650             | 27.5     | 5.80             | 5.81                |
-| attn_implementation=kernels-community/flash-attn | 16    | 512    | 23.612             | 346.9    | 6.41             | 6.62                |
-| attn_implementation=kernels-community/flash-attn | 32    | 512    | 24.025             | 682.0    | 7.08             | 8.47                |
-| attn_implementation=eager                       | 1     | 2048   | 71.426             | 28.7     | 5.92             | 6.04                |
-| attn_implementation=eager                       | 16    | 2048   | 71.743             | 456.7    | 8.34             | 14.83               |
-| attn_implementation=eager                       | 32    | 2048   | 77.889             | 841.4    | 10.91            | 39.77               |
-| attn_implementation=sdpa                        | 1     | 2048   | 56.245             | 36.4     | 5.91             | 6.02                |
-| attn_implementation=sdpa                        | 16    | 2048   | 70.460             | 465.1    | 8.33             | 14.83               |
-| attn_implementation=sdpa                        | 32    | 2048   | 75.058             | 873.1    | 10.90            | 39.78               |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 1     | 2048   | 73.922             | 27.7     | 5.91             | 6.02                |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 16    | 2048   | 95.068             | 344.7    | 8.17             | 23.79               |
-| attn_implementation=kernels-community/flash-attn3:flash_attention | 32    | 2048   | 96.181             | 681.4    | 10.61            | 78.71               |
-| attn_implementation=kernels-community/flash-attn | 1     | 2048   | 74.111             | 27.6     | 5.91             | 6.02                |
-| attn_implementation=kernels-community/flash-attn | 16    | 2048   | 94.579             | 346.5    | 8.17             | 23.79               |
-| attn_implementation=kernels-community/flash-attn | 32    | 2048   | 96.758             | 677.3    | 10.61            | 78.70               |
+| Batch | Tokens | eager (Latency s / Tok/s / Alloc GiB / Reserved GiB) | sdpa (Latency s / Tok/s / Alloc GiB / Reserved GiB) | flash-attn3 (Latency s / Tok/s / Alloc GiB / Reserved GiB) | flash-attn (Latency s / Tok/s / Alloc GiB / Reserved GiB) |
+|-------|--------|------------------------------------------------------|-----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------------------|
+| 1     | 512    | 17.895 / 28.6 / 5.80 / 5.83                         | 14.180 / 36.1 / 5.80 / 5.81                        | 18.530 / 27.6 / 5.80 / 5.81                               | 18.650 / 27.5 / 5.80 / 5.81                              |
+| 16    | 512    | 18.036 / 454.2 / 6.46 / 6.86                        | 17.595 / 465.6 / 6.46 / 6.86                       | 23.669 / 346.1 / 6.41 / 6.62                              | 23.612 / 346.9 / 6.41 / 6.62                             |
+| 32    | 512    | 18.572 / 882.2 / 7.15 / 8.46                        | 17.478 / 937.4 / 7.15 / 8.46                       | 23.887 / 685.9 / 7.08 / 8.43                              | 24.025 / 682.0 / 7.08 / 8.47                             |
+| 1     | 2048   | 71.426 / 28.7 / 5.92 / 6.04                         | 56.245 / 36.4 / 5.91 / 6.02                        | 73.922 / 27.7 / 5.91 / 6.02                               | 74.111 / 27.6 / 5.91 / 6.02                              |
+| 16    | 2048   | 71.743 / 456.7 / 8.34 / 14.83                       | 70.460 / 465.1 / 8.33 / 14.83                      | 95.068 / 344.7 / 8.17 / 23.79                             | 94.579 / 346.5 / 8.17 / 23.79                            |
+| 32    | 2048   | 77.889 / 841.4 / 10.91 / 39.77                      | 75.058 / 873.1 / 10.90 / 39.78                     | 96.181 / 681.4 / 10.61 / 78.71                            | 96.758 / 677.3 / 10.61 / 78.70                           |
+
+**Legend:**  
+- eager = `attn_implementation=eager`  
+- sdpa = `attn_implementation=sdpa`  
+- flash-attn3 = `attn_implementation=kernels-community/flash-attn3:flash_attention`  
+- flash-attn = `attn_implementation=kernels-community/flash-attn`  
+- Each cell: `Median Latency (s) / Tokens/s / Peak Alloc (GiB) / Peak Reserved (GiB)`
