@@ -78,6 +78,9 @@ def load_model(attn_implementation: str):
         attn_implementation=attn_implementation,
     ).eval()
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    # Ensure tokenizer has a pad token for proper batching
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     return tokenizer, model, model.device
 
 
@@ -102,24 +105,33 @@ def build_inputs(tokenizer, device, batch_size=1):
         batch_messages.append(messages)
     
     # Apply chat template to each conversation in the batch
-    batch_inputs = []
+    batch_texts = []
     for messages in batch_messages:
-        inputs = tokenizer.apply_chat_template(
+        text = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
+            tokenize=False,
+        )
+        batch_texts.append(text)
+    
+    # Tokenize all texts together with padding to handle variable lengths
+    if batch_size == 1:
+        inputs = tokenizer(
+            batch_texts[0],
             return_tensors="pt",
             return_dict=True,
         )
-        batch_inputs.append(inputs)
-    
-    # Stack the inputs to create a proper batch
-    if batch_size == 1:
-        return batch_inputs[0].to(device)
+        return inputs.to(device)
     else:
-        # Concatenate input_ids and attention_mask
-        input_ids = torch.cat([inp["input_ids"] for inp in batch_inputs], dim=0)
-        attention_mask = torch.cat([inp["attention_mask"] for inp in batch_inputs], dim=0)
-        return {"input_ids": input_ids.to(device), "attention_mask": attention_mask.to(device)}
+        # Use padding to handle variable-length sequences
+        inputs = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            return_dict=True,
+            padding=True,  # Pad to the longest sequence in the batch
+            truncation=True,  # Ensure we don't exceed model's max length
+        )
+        return {k: v.to(device) for k, v in inputs.items()}
 
 
 # ----------------------------
@@ -175,9 +187,11 @@ def benchmark_scenario(attn_implementation: str, batch_size: int = 1) -> Scenari
     tokenizer, model, device = load_model(attn_implementation)
     inputs = build_inputs(tokenizer, device, batch_size)
 
-    # Warmups (not measured)
+    # Warmups (not measured) - use smaller token budget for larger batches to avoid OOM
+    # Scale down the warmup tokens based on batch size to prevent memory issues
+    warmup_tokens = min(TOKEN_BUDGETS) if batch_size > 4 else TOKEN_BUDGETS[0]
     for _ in range(WARMUP_GENERATIONS):
-        _ = generate_once(model, inputs, max_new_tokens=max(TOKEN_BUDGETS))
+        _ = generate_once(model, inputs, max_new_tokens=warmup_tokens)
         torch.cuda.synchronize(device)
 
     result = ScenarioResult(
