@@ -16,18 +16,19 @@ MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
 DEVICE = "cuda"                # Single H100
 SEED = 1234
 NUM_THREADS = torch.get_num_threads()
-TOKEN_BUDGETS = [512, 2048]
-BATCH_SIZES = [1, 16, 32]       # batch sizes to test (processes multiple inputs simultaneously)
+TOKEN_BUDGETS = [2048]
+BATCH_SIZES = [1, 32]       # batch sizes to test (processes multiple inputs simultaneously)
 WARMUP_GENERATIONS = 1           # warmup calls (not timed)
 MEM_REPEATS = 3                  # times to measure peak memory per setting
 TIMER_MIN_RUNTIME_S = 2.0        # torch.benchmark blocked_autorange budget
 
 # Attention implementations to benchmark
 ATTN_IMPLEMENTATIONS = [
-    "eager",
-    "sdpa", 
-    "kernels-community/flash-attn3:flash_attention",
-    "kernels-community/flash-attn"
+#    "eager",
+#    "sdpa", 
+#    "kernels-community/flash-attn3:flash_attention",
+    "kernels-community/flash-attn",
+    "flash_attention_2",
 ]
 
 
