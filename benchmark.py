@@ -16,8 +16,9 @@ MODEL_ID = "HuggingFaceTB/SmolLM3-3B"
 DEVICE = "cuda"                # Single H100
 SEED = 1234
 NUM_THREADS = torch.get_num_threads()
-TOKEN_BUDGETS = [512, 2048]
-BATCH_SIZES = [1, 16, 32]       # batch sizes to test (processes multiple inputs simultaneously)
+TOKEN_BUDGETS = [100]
+BATCH_SIZES = [16]       # batch sizes to test (processes multiple inputs simultaneously)
+MAX_LENGTH = 4096
 WARMUP_GENERATIONS = 1           # warmup calls (not timed)
 MEM_REPEATS = 3                  # times to measure peak memory per setting
 TIMER_MIN_RUNTIME_S = 2.0        # torch.benchmark blocked_autorange budget
@@ -26,10 +27,9 @@ TIMER_MIN_RUNTIME_S = 2.0        # torch.benchmark blocked_autorange budget
 ATTN_IMPLEMENTATIONS = [
     "eager",
     "sdpa", 
+    "kernels-community/flash-attn",
     "kernels-community/flash-attn3:flash_attention",
-    "kernels-community/flash-attn"
 ]
-
 
 # ----------------------------
 # Utilities
@@ -38,16 +38,13 @@ def set_determinism(seed=SEED):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-
 def to_gib(x_bytes: int) -> float:
     return x_bytes / (1024 ** 3)
-
 
 def clear_cuda():
     torch.cuda.empty_cache()
     torch.cuda.ipc_collect()
     gc.collect()
-
 
 @dataclass
 class Point:
@@ -58,7 +55,6 @@ class Point:
     peak_reserved_gib: float
     batch_size: int = 1
 
-
 @dataclass
 class ScenarioResult:
     label: str
@@ -66,14 +62,13 @@ class ScenarioResult:
     # map: max_new_tokens -> Point
     by_tokens: dict = field(default_factory=dict)
 
-
 # ----------------------------
 # Model + inputs
 # ----------------------------
 def load_model(attn_implementation: str):
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype="auto",
+        torch_dtype=torch.bfloat16,
         device_map=DEVICE,
         attn_implementation=attn_implementation,
     ).eval()
@@ -85,7 +80,6 @@ def load_model(attn_implementation: str):
 
 
 def build_inputs(tokenizer, device, batch_size=1):
-    # Create different prompts for each item in the batch to simulate realistic usage
     base_prompts = [
         "What is Tensor Parallelism?",
         "Explain machine learning fundamentals.",
@@ -96,15 +90,11 @@ def build_inputs(tokenizer, device, batch_size=1):
         "How does backpropagation work?",
         "Explain the concept of overfitting.",
     ]
-    
-    # Cycle through prompts to create a batch
     batch_messages = []
     for i in range(batch_size):
         prompt = base_prompts[i % len(base_prompts)]
         messages = [{"role": "system", "content": prompt}]
         batch_messages.append(messages)
-    
-    # Apply chat template to each conversation in the batch
     batch_texts = []
     for messages in batch_messages:
         text = tokenizer.apply_chat_template(
@@ -113,23 +103,25 @@ def build_inputs(tokenizer, device, batch_size=1):
             tokenize=False,
         )
         batch_texts.append(text)
-    
-    # Tokenize all texts together with padding to handle variable lengths
     if batch_size == 1:
         inputs = tokenizer(
             batch_texts[0],
             return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=MAX_LENGTH,
         )
         return inputs.to(device)
     else:
-        # Use padding to handle variable-length sequences
         inputs = tokenizer(
             batch_texts,
             return_tensors="pt",
-            padding=True,  # Pad to the longest sequence in the batch
-            truncation=True,  # Ensure we don't exceed model's max length
+            padding="max_length",
+            truncation=True,
+            max_length=MAX_LENGTH,
         )
         return {k: v.to(device) for k, v in inputs.items()}
+
 
 
 # ----------------------------
@@ -145,6 +137,7 @@ def generate_once(model, model_inputs, max_new_tokens: int):
         max_new_tokens=max_new_tokens,
         eos_token_id=-1,
         disable_compile=True,
+        use_cache=True,
         return_dict_in_generate=True,  # so we can count actual generated length
     )
 
@@ -185,18 +178,8 @@ def benchmark_scenario(attn_implementation: str, batch_size: int = 1) -> Scenari
     tokenizer, model, device = load_model(attn_implementation)
     inputs = build_inputs(tokenizer, device, batch_size)
 
-    # Warmups (not measured) - use smaller token budget for larger batches to avoid OOM
-    # Scale down the warmup tokens based on batch size to prevent memory issues
-    if batch_size >= 32:
-        warmup_tokens = min(256, min(TOKEN_BUDGETS) // 2)  # Very conservative for large batches
-    elif batch_size >= 16:
-        warmup_tokens = min(TOKEN_BUDGETS) // 2  # Half the smallest budget for medium-large batches
-    elif batch_size > 4:
-        warmup_tokens = min(TOKEN_BUDGETS)  # Smallest budget for moderately large batches
-    else:
-        warmup_tokens = TOKEN_BUDGETS[0]  # First budget for small batches
     for _ in range(WARMUP_GENERATIONS):
-        _ = generate_once(model, inputs, max_new_tokens=warmup_tokens)
+        _ = generate_once(model, inputs, max_new_tokens=100)
         torch.cuda.synchronize(device)
 
     result = ScenarioResult(
@@ -304,7 +287,10 @@ if __name__ == "__main__":
         for batch_size in BATCH_SIZES:
             print(f"\n>>> Benchmarking with attn_implementation={attn_impl}, batch_size={batch_size}")
             try:
-                res = benchmark_scenario(attn_implementation=attn_impl, batch_size=batch_size)
+                res = benchmark_scenario(
+                    attn_implementation=attn_impl, 
+                    batch_size=batch_size,
+                )
                 results.append(res)
             except Exception as e:
                 print(f"Failed to benchmark {attn_impl} with batch_size={batch_size}: {e}")
